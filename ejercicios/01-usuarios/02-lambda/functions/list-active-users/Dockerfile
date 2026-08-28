@@ -12,3 +12,4 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 FROM public.ecr.aws/lambda/provided:al2023
 COPY --from=build /out/bootstrap ${LAMBDA_RUNTIME_DIR}/bootstrap
+CMD ["bootstrap"]

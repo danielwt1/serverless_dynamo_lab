@@ -3,7 +3,10 @@
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": "dynamodb:TransactWriteItems",
+      "Action": [
+        "dynamodb:TransactWriteItems",
+        "dynamodb:PutItem"
+      ],
       "Resource": "arn:aws:dynamodb:<AWS_REGION>:<AWS_ACCOUNT_ID>:table/users"
     }
   ]

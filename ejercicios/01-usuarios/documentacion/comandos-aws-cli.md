@@ -21,16 +21,16 @@ aws configure list
 
 ## Convención de etiquetas (*tags*)
 
-Los *tags* de recursos son metadatos `Key=...,Value=...`. Sirven para reconocer quién es responsable de un recurso, a qué sistema pertenece y en qué entorno se ejecuta; **no otorgan permisos por sí mismos**. Los comandos de esta guía usan este ejemplo para el laboratorio:
+Los *tags* de recursos son pares de metadatos, por ejemplo `environment=dev`. Sirven para reconocer quién es responsable de un recurso, a qué sistema pertenece y en qué entorno se ejecuta; **no otorgan permisos por sí mismos**. AWS CLI no usa una única sintaxis para todos los servicios: Lambda y CloudWatch Logs reciben un mapa (`environment=dev,...`), mientras IAM y ECR reciben una lista de objetos (`Key=environment,Value=dev ...`). Los comandos de cada sección usan el formato que exige su servicio.
 
 ```code
---tags Key=environment,Value=dev Key=system,Value=users Key=owner,Value=backend Key=managed-by,Value=manual-cli
+--tags environment=dev,system=users,owner=backend,managed-by=manual-cli
 ```
 
 En producción podrías usar:
 
 ```code
---tags Key=environment,Value=prod Key=system,Value=users Key=owner,Value=team-backend Key=cost-center,Value=engineering Key=managed-by,Value=cdk Key=data-classification,Value=internal
+--tags environment=prod,system=users,owner=team-backend,cost-center=engineering,managed-by=cdk,data-classification=internal
 ```
 
 | Tag | Ejemplo producción | Por qué usarlo |
@@ -251,7 +251,7 @@ Hay cuatro documentos JSON, aunque solo tres son políticas de permisos:
 | Archivo | Tipo | Para qué sirve |
 | --- | --- | --- |
 | `policy_lambda_asume_rol.json` | Política de confianza (*trust policy*) | Permite que el servicio `lambda.amazonaws.com` asuma un rol. No concede acceso a DynamoDB. |
-| `policy_create_user_dynamo.json` | Política de permisos | Permite `dynamodb:TransactWriteItems` sobre `users`. |
+| `policy_create_user_dynamo.json` | Política de permisos | Permite `dynamodb:TransactWriteItems` y los `dynamodb:PutItem` que la transacción ejecuta sobre `users`. |
 | `policy_authenticate_user_dynamo.json` | Política de permisos | Permite `dynamodb:GetItem` sobre `users`. |
 | `policy_list_active_users_dynamo.json` | Política de permisos | Permite `dynamodb:Query` solo sobre `users/index/GSI1`. |
 
@@ -606,6 +606,16 @@ Qué hace cada parte:
 
 El Dockerfile es multi-etapa: primero descarga dependencias y compila el binario Go `bootstrap`; luego copia solo ese binario a la imagen final `provided.al2023` de Lambda. La imagen final no debería incluir el compilador Go, tests ni código fuente.
 
+Como `provided.al2023` es un runtime personalizado, el Dockerfile debe terminar indicando el binario que el *entrypoint* de Lambda recibirá como handler:
+
+```code
+FROM public.ecr.aws/lambda/provided:al2023
+COPY --from=build /out/bootstrap ${LAMBDA_RUNTIME_DIR}/bootstrap
+CMD ["bootstrap"]
+```
+
+`COPY` deja el ejecutable en el directorio del runtime; `CMD ["bootstrap"]` lo entrega como primer argumento al *entrypoint* de la imagen base. Si omites `CMD`, la imagen puede construirse y subirse correctamente, pero Lambda fallará antes de ejecutar Go con el mensaje `entrypoint requires the handler name to be the first argument`. Verifica esta condición antes de construir las tres funciones.
+
 Antes de publicar, verifica que Docker tiene la imagen local y que su arquitectura es `arm64`:
 
 ```code
@@ -778,7 +788,7 @@ aws lambda create-function \
   --environment 'Variables={USERS_TABLE_NAME=users}' \
   --logging-config LogFormat=Text \
   --publish \
-  --tags Key=environment,Value=dev Key=system,Value=users Key=owner,Value=backend Key=managed-by,Value=manual-cli
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
 ```
 
 `create-function` crea el recurso Lambda; no invoca el código. La primera descarga y optimización de la imagen puede tardar un momento, por eso la respuesta inicial puede mostrar estado `Pending`.
@@ -797,7 +807,7 @@ aws lambda create-function \
 | `--publish` | presente | Crea también la primera versión publicada de la función además de `$LATEST`. Una versión publicada es inmutable y permitirá usar alias como `dev` o `prod` cuando automaticemos despliegues. |
 | `--tags` | etiquetas de laboratorio | Metadatos del recurso Lambda para inventario, costo y gobierno. No conceden permisos y no son tags de la imagen ECR. |
 
-Lambda necesita acceso para recuperar la imagen privada. Como ECR y Lambda están en la **misma cuenta**, AWS permite concederlo mediante el rol de ejecución o mediante una política del repositorio ECR. En este laboratorio preferimos que Lambda gestione la política mínima del repositorio al crear la función; para lograrlo, la identidad que ejecuta este comando debe poder consultar y actualizar la política de ECR, además de leer la imagen. No agregues permisos ECR amplios al rol `lambda-create-user-role` solo por costumbre: ese rol es para ejecutar el handler y trabajar con DynamoDB/CloudWatch.
+Lambda necesita recuperar la imagen privada, pero **no lo hace usando el rol de ejecución**. Ese rol solo existe después, cuando corre el handler y accede a DynamoDB y CloudWatch. Para una Lambda y un repositorio ECR en la misma cuenta, el servicio Lambda queda autorizado mediante la política basada en recursos del repositorio; al crear la función AWS puede gestionar esa política mínima si la identidad operadora tiene permiso para consultarla y actualizarla. No agregues permisos ECR amplios al rol `lambda-create-user-role` por costumbre.
 
 ### 5.3 Esperar, comprobar y entender el resultado
 
@@ -819,7 +829,27 @@ aws lambda get-function-configuration \
 
 La salida debe mostrar `users-create-user`, `Active`, `Image`, `arm64`, `256`, `10`, el ARN del rol correcto, `USERS_TABLE_NAME` con valor `users` y versión `1`. La primera versión publicada es `1`; `$LATEST` sigue existiendo como copia editable de trabajo, pero no debes usarla como referencia de producción.
 
-Comprueba también que Lambda creó el grupo de logs esperado, aunque todavía puede no tener eventos hasta la primera invocación:
+Configura ahora la retención del grupo de CloudWatch Logs. La retención **no** se define con `create-function`: CloudWatch Logs la administra por separado. Para no depender de que la primera invocación cree el grupo automáticamente, créalo tú antes de invocar la función:
+
+```code
+aws logs create-log-group \
+  --log-group-name /aws/lambda/users-create-user \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+```
+
+El nombre `/aws/lambda/NOMBRE_DE_LAMBDA` es la convención que Lambda usa para su grupo por defecto; en este caso `NOMBRE_DE_LAMBDA` es `users-create-user`. Los tags de Lambda no se copian de forma automática al grupo de logs, por eso se declaran otra vez. Si el comando responde `ResourceAlreadyExistsException`, el grupo ya fue creado por una invocación anterior: no es un problema y debes continuar con el siguiente comando.
+
+```code
+aws logs put-retention-policy \
+  --log-group-name /aws/lambda/users-create-user \
+  --retention-in-days 3
+```
+
+`--retention-in-days 3` conserva cada evento durante tres días y luego CloudWatch Logs lo elimina. Es adecuado para estos labs: deja tiempo para investigar un error sin mantener datos de prueba ni acumular costo indefinidamente. Repite ambos pasos para cada Lambda, sustituyendo únicamente el nombre de la función. Si el grupo ya existe, solo necesitas ejecutar `put-retention-policy`.
+
+En producción no hay un número universal. Se elige la retención con requisitos de auditoría, privacidad, capacidad de diagnóstico y costo: por ejemplo, 30 días para desarrollo, 90 días para operación habitual y más tiempo solo cuando cumplimiento lo exija. Es preferible crear el grupo y su retención desde IaC antes del despliegue para impedir que una función nueva quede accidentalmente con retención infinita.
+
+Comprueba el valor configurado:
 
 ```code
 aws logs describe-log-groups \
@@ -828,35 +858,50 @@ aws logs describe-log-groups \
   --output table
 ```
 
-Por defecto, Lambda puede crear el grupo `/aws/lambda/users-create-user` al primer uso y CloudWatch Logs conserva los eventos indefinidamente si no defines retención. Para el laboratorio no cambiaremos la retención todavía. En producción se configura explícitamente —por ejemplo 30, 90 o 365 días según cumplimiento— y se equilibra necesidad de diagnóstico, privacidad y costo.
+Debe aparecer `/aws/lambda/users-create-user` y `3` en la columna de retención. Si aparece vacío, todavía no hay política de retención y CloudWatch Logs conservaría los eventos indefinidamente.
 
 ### 5.4 Prueba directa opcional: tiene efecto en DynamoDB
 
 La función está preparada para recibir un evento de API Gateway HTTP API versión 2. Ya existe un archivo de evento de ejemplo en el proyecto. **Invocarlo crea un usuario en DynamoDB**, así que hazlo una sola vez y no lo repitas con el mismo correo: la operación debe responder conflicto por correo duplicado.
 
+Este comando asume que estás ubicado en `ejercicios/01-usuarios`, tal como los pasos anteriores. En WSL usa rutas Linux: la carpeta de Windows `C:\\Users\\USUARIO\\...` corresponde a `/mnt/c/Users/USUARIO/...`, no a `/c/Users/...`. La ruta relativa evita tener que escribir la ruta absoluta.
+
 ```code
 aws lambda invoke \
   --function-name users-create-user \
   --cli-binary-format raw-in-base64-out \
-  --payload fileb://ejercicios/01-usuarios/02-lambda/functions/create-user/internal/handler/events/request.json \
-  /tmp/create-user-response.json
+  --payload fileb://02-lambda/functions/create-user/internal/handler/events/request.json \
+  create-user-response.json
 ```
 
 - `--function-name`: destino de la invocación directa. Esto no da acceso público a la función.
 - `--cli-binary-format raw-in-base64-out`: hace que AWS CLI v2 envíe el JSON del archivo como bytes sin pedir que lo codifiques en Base64.
-- `--payload fileb://...`: archivo de evento HTTP API v2. El prefijo `fileb://` lo trata como contenido binario; el handler recibirá el cuerpo y ruta de ejemplo.
-- `/tmp/create-user-response.json`: archivo local de salida que AWS CLI creará o reemplazará con la respuesta del handler. No es un archivo en AWS.
+- `--payload fileb://02-lambda/...`: archivo de evento HTTP API v2, relativo al directorio actual. El prefijo `fileb://` lo trata como contenido binario; el handler recibirá el cuerpo y ruta de ejemplo. Si prefieres una ruta absoluta en WSL, usa `fileb:///mnt/c/Users/USUARIO/GolandProjects/serverless_dynamo_lab/ejercicios/01-usuarios/02-lambda/...`; nunca `fileb:///c/...`.
+- `create-user-response.json`: archivo local de salida que AWS CLI creará o reemplazará en tu directorio actual con la respuesta del handler. No es un archivo en AWS.
 
 Después, consulta la respuesta y el log más reciente:
 
 ```code
-cat /tmp/create-user-response.json
+cat create-user-response.json
 
 aws logs tail /aws/lambda/users-create-user \
   --since 10m
 ```
 
 Una respuesta correcta contiene un `statusCode` `201`. Si recibes `409`, el correo del evento ya fue creado: no es un fallo de infraestructura, sino la protección de unicidad esperada. Si recibes `500`, consulta los logs antes de cambiar permisos o recrear recursos.
+
+### Resultado final esperado: Lambda `users-create-user`
+
+Da por terminada esta Lambda solo después de comprobar ambos escenarios con el mismo evento de ejemplo:
+
+| Prueba | Resultado en `create-user-response.json` | Qué demuestra |
+| --- | --- | --- |
+| Primera invocación | `statusCode` `201` | La imagen inicia, la variable de entorno se lee, el rol puede ejecutar la transacción y DynamoDB creó el usuario. |
+| Segunda invocación con el mismo email | `statusCode` `409` y mensaje `user already exists` | La condición transaccional reservó el correo y evita que se creen dos usuarios con la misma dirección. |
+
+El campo `StatusCode: 200` que imprime AWS CLI pertenece al servicio Lambda: confirma que la invocación llegó y produjo una respuesta. El `statusCode` dentro de `create-user-response.json` es la respuesta HTTP de tu handler, que API Gateway devolverá al cliente cuando conectemos la ruta. No confundas ambos valores.
+
+El log de éxito debe incluir `dynamodb TransactWriteItems completed: table=users result=created`; al repetir el correo debe indicar el resultado de duplicado. Conserva esta prueba como evidencia manual del contrato de la Lambda antes de continuar con `authenticate-user`.
 
 ### 5.5 Errores frecuentes al crear la primera Lambda
 
@@ -866,10 +911,533 @@ Una respuesta correcta contiene un `statusCode` `201`. Si recibes `409`, el corr
 | `InvalidParameterValueException` relacionado con imagen | URI/tag inexistente, región distinta o arquitectura incompatible. | Revisa `describe-images`, el URI y que build/Lambda sean `arm64`. |
 | Error de permisos ECR al crear | La identidad de AWS CLI no puede leer/gestionar la política del repositorio. | Revisa los permisos del usuario o rol de despliegue; no amplíes a ciegas el rol de ejecución de Lambda. |
 | `AccessDenied` al invocar DynamoDB | Rol incorrecto o política `lambda-users-create-transaction` no adjunta. | Ejecuta `list-attached-role-policies` y revisa los logs. |
+| `AccessDeniedException` para `dynamodb:PutItem` durante `TransactWriteItems` | La política permite la operación de transacción, pero no las escrituras `Put` contenidas en ella. | Añade `dynamodb:PutItem` a `lambda-users-create-transaction`, publica una nueva versión predeterminada de la política y vuelve a invocar; no reconstruyas la imagen. |
 | Error `USERS_TABLE_NAME is required` | Se usó `TABLE_NAME` o falta la variable. | Comprueba `Environment.Variables` con `get-function-configuration`. |
-| La invocación devuelve `FunctionError` | El handler falló aunque Lambda exista. | Lee `/tmp/create-user-response.json` y `aws logs tail`; no recrees la función sin diagnosticar. |
+| La invocación devuelve `FunctionError` | El handler falló aunque Lambda exista. | Lee `create-user-response.json` y `aws logs tail`; no recrees la función sin diagnosticar. |
+| `Runtime.ExitError` y logs con `entrypoint requires the handler name to be the first argument` | La imagen basada en `provided.al2023` no tiene `CMD ["bootstrap"]`, por lo que el runtime falla durante inicialización. El payload aún no se procesa. | Corrige el Dockerfile, publica un tag nuevo y actualiza el código de la Lambda; sigue el procedimiento inmediato siguiente. |
 
-Fuentes: [AWS CLI `create-function`](https://docs.aws.amazon.com/cli/latest/reference/lambda/create-function.html) y [crear Lambda desde una imagen de contenedor](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html).
+### 5.6 Recuperación: la imagen inicia sin handler
+
+Este caso ocurrió al invocar `users-create-user`: el error está antes de `lambda.Start(...)`. Por tanto no cambies el body, DynamoDB ni las políticas IAM todavía. Primero abre `02-lambda/functions/create-user/Dockerfile` y agrega al final `CMD ["bootstrap"]`, debajo de `COPY --from=build ...`.
+
+ECR se creó con tags inmutables. No intentes volver a publicar `create-user-v1`: usa una versión nueva. Desde `ejercicios/01-usuarios`, reconstruye, publica y despliega `create-user-v2`:
+
+```code
+docker buildx build --platform linux/arm64 --provenance=false --load \
+  -t ACCOUNT_ID_REAL.dkr.ecr.REGION_REAL.amazonaws.com/users-service:create-user-v2 \
+  02-lambda/functions/create-user
+
+docker push ACCOUNT_ID_REAL.dkr.ecr.REGION_REAL.amazonaws.com/users-service:create-user-v2
+
+aws lambda update-function-code \
+  --function-name users-create-user \
+  --image-uri ACCOUNT_ID_REAL.dkr.ecr.REGION_REAL.amazonaws.com/users-service:create-user-v2 \
+  --publish
+
+aws lambda wait function-updated-v2 \
+  --function-name users-create-user
+```
+
+`update-function-code` no crea una segunda Lambda: cambia la imagen de la función existente. `--publish` genera una nueva versión inmutable; el *waiter* evita invocarla mientras Lambda continúa optimizando la imagen. Luego repite **exactamente** la invocación de la sección 5.4. Si ahora aparece un error sobre el body, variables o DynamoDB, ese será el siguiente nivel de diagnóstico: antes no podía existir porque el proceso Go no arrancaba.
+
+### 5.7 Recuperación: transacción sin permiso `PutItem`
+
+Una llamada `TransactWriteItems` no elimina la necesidad de autorizar las operaciones que contiene. `create-user` usa dos `Put` dentro de la transacción: una reserva el correo para garantizar unicidad y otra crea el perfil. Por eso `policy_create_user_dynamo.json` incluye tanto `dynamodb:TransactWriteItems` como `dynamodb:PutItem`, limitados a la tabla `users`.
+
+Si ya creaste la política administrada, editar el archivo local no cambia IAM. Desde `ejercicios/01-usuarios`, reemplaza los marcadores del archivo y crea una versión nueva predeterminada. Consulta primero tu cuenta y región; copia los dos valores reales en el comando `sed`:
+
+```code
+aws sts get-caller-identity --query Account --output text
+
+aws configure get region
+```
+
+```code
+sed -e 's/<AWS_REGION>/REGION_REAL/g' -e 's/<AWS_ACCOUNT_ID>/ACCOUNT_ID_REAL/g' documentacion/policy/policy_create_user_dynamo.json > /tmp/policy_create_user_dynamo.json
+```
+
+```code
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::ACCOUNT_ID_REAL:policy/lambda-users-create-transaction \
+  --policy-document file:///tmp/policy_create_user_dynamo.json \
+  --set-as-default
+```
+
+`--set-as-default` hace que el rol adjunto use la versión nueva sin volver a asociar la política ni actualizar la Lambda. Después repite la invocación de la sección 5.4. Si IAM informa que ya existen cinco versiones de la política, lista las versiones, confirma cuál no es la predeterminada y elimina únicamente una versión antigua antes de crear la nueva; nunca elimines la versión marcada como predeterminada.
+
+### 5.8 Crear y validar `users-authenticate-user`
+
+Esta Lambda lee el registro de unicidad por correo con `GetItem`. Usa la imagen `authenticate-user-v2`, el rol `lambda-authenticate-user-role` y la variable de entorno `TABLE_NAME=users`. No reutilices `USERS_TABLE_NAME`: ese nombre solo pertenece a `create-user`.
+
+```code
+aws lambda create-function \
+  --function-name users-authenticate-user \
+  --package-type Image \
+  --code ImageUri=ACCOUNT_ID_REAL.dkr.ecr.REGION_REAL.amazonaws.com/users-service:authenticate-user-v2 \
+  --role arn:aws:iam::ACCOUNT_ID_REAL:role/lambda-authenticate-user-role \
+  --architectures arm64 \
+  --timeout 10 \
+  --memory-size 256 \
+  --environment 'Variables={TABLE_NAME=users}' \
+  --logging-config LogFormat=Text \
+  --publish \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+```
+
+`--code` identifica la imagen privada ya publicada; `--role` limita el handler a la política `lambda-users-read-getitem`; `--environment` entrega el nombre físico de tabla sin fijarlo en código. El resto conserva las decisiones de la primera Lambda: imagen ARM64, diez segundos, 256 MB y versión publicada. Crear la función no ejecuta un login ni expone una URL pública.
+
+```code
+aws lambda wait function-active-v2 \
+  --function-name users-authenticate-user
+
+aws logs create-log-group \
+  --log-group-name /aws/lambda/users-authenticate-user \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+
+aws logs put-retention-policy \
+  --log-group-name /aws/lambda/users-authenticate-user \
+  --retention-in-days 3
+```
+
+Si `create-log-group` informa que el grupo ya existe, continúa con la retención. Comprueba la función y la retención antes de invocar:
+
+```code
+aws lambda get-function-configuration \
+  --function-name users-authenticate-user \
+  --query '[FunctionName,State,LastUpdateStatus,Architectures,MemorySize,Timeout,Role,Environment.Variables,Version]' \
+  --output table
+
+aws logs describe-log-groups \
+  --log-group-name-prefix /aws/lambda/users-authenticate-user \
+  --query 'logGroups[*].[logGroupName,retentionInDays]' \
+  --output table
+```
+
+Desde `ejercicios/01-usuarios`, realiza la prueba directa. No crea ni modifica usuarios:
+
+```code
+aws lambda invoke \
+  --function-name users-authenticate-user \
+  --cli-binary-format raw-in-base64-out \
+  --payload fileb://02-lambda/functions/authenticate-user/internal/handler/events/request.json \
+  authenticate-user-response.json
+
+cat authenticate-user-response.json
+
+aws logs tail /aws/lambda/users-authenticate-user \
+  --since 10m
+```
+
+Para un registro existente y credenciales que coincidan, el body debe contener `statusCode` `200` y el identificador de usuario. Con credenciales inválidas, la implementación actual responde `404`; el contrato OpenAPI plantea `401`, por lo que esa diferencia es una mejora pendiente del handler, no un error de Lambda, IAM o DynamoDB. Un log `dynamodb GetItem completed: table=users result=found` demuestra la lectura; `result=not_found` demuestra que la consulta se ejecutó pero no encontró el correo.
+
+**Hallazgo de la validación actual:** si el usuario fue creado por la versión inicial de `create-user`, el adaptador de creación guarda el valor literal `PASSWORD` en DynamoDB en vez de la contraseña recibida en el request. En consecuencia, el evento de ejemplo de autenticación puede mostrar `result=found` en logs y aun así responder `404` por credenciales distintas. Esto confirma que la infraestructura de lectura funciona y revela un defecto de aplicación que debe corregirse antes de declarar el login funcional. La corrección no consiste en ampliar IAM: debe persistirse la contraseña recibida —en un sistema real, un hash seguro, nunca texto plano— y crear un usuario de prueba nuevo con la imagen corregida.
+
+### 5.9 Crear y validar `users-list-active-users`
+
+Esta Lambda consulta el GSI `GSI1` mediante el rol `lambda-list-active-users-role`. Por eso `Query` debe autorizarse sobre el ARN del índice, no solo sobre la tabla. Usa la imagen `list-active-users-v2` y también requiere `TABLE_NAME=users`.
+
+```code
+aws lambda create-function \
+  --function-name users-list-active-users \
+  --package-type Image \
+  --code ImageUri=ACCOUNT_ID_REAL.dkr.ecr.REGION_REAL.amazonaws.com/users-service:list-active-users-v2 \
+  --role arn:aws:iam::ACCOUNT_ID_REAL:role/lambda-list-active-users-role \
+  --architectures arm64 \
+  --timeout 10 \
+  --memory-size 256 \
+  --environment 'Variables={TABLE_NAME=users}' \
+  --logging-config LogFormat=Text \
+  --publish \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+```
+
+```code
+aws lambda wait function-active-v2 \
+  --function-name users-list-active-users
+
+aws logs create-log-group \
+  --log-group-name /aws/lambda/users-list-active-users \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+
+aws logs put-retention-policy \
+  --log-group-name /aws/lambda/users-list-active-users \
+  --retention-in-days 3
+```
+
+```code
+aws lambda get-function-configuration \
+  --function-name users-list-active-users \
+  --query '[FunctionName,State,LastUpdateStatus,Architectures,MemorySize,Timeout,Role,Environment.Variables,Version]' \
+  --output table
+
+aws lambda invoke \
+  --function-name users-list-active-users \
+  --cli-binary-format raw-in-base64-out \
+  --payload fileb://02-lambda/functions/list-active-users/internal/handler/events/request.json \
+  list-active-users-response.json
+
+cat list-active-users-response.json
+
+aws logs tail /aws/lambda/users-list-active-users \
+  --since 10m
+```
+
+La respuesta de negocio debe tener `statusCode` `200` y un cuerpo con `items`; como `create-user` ya creó un usuario `ACTIVE`, la lista debe contener al menos uno. El handler acepta `limit` entre 1 y 100 y devuelve un `nextCursor` opaco si existe otra página. El log esperado es `dynamodb Query completed: table=users index=GSI1`; si aparece `AccessDenied` para `Query`, revisa que la política se refiera a `table/users/index/GSI1`.
+
+Resultado final de las dos funciones: `authenticate-user` confirma el patrón de lectura directa por clave (`GetItem`) y `list-active-users` confirma el patrón de lectura por índice ordenado (`Query` sobre GSI). Ambas deben mostrar su grupo de logs con retención de 3 días antes de empezar la fase de API Gateway.
+
+## 6. Exponer las Lambdas mediante API Gateway HTTP
+
+Una HTTP API es la capa pública del laboratorio: recibe HTTP, genera un evento *payload v2.0* y lo entrega a la Lambda integrada. Las Lambdas no se vuelven públicas por crear esta API; cada una recibe un permiso explícito y restringido a su ruta. Todos los comandos de esta sección usan `ACCOUNT_ID_REAL` y `REGION_REAL` como marcadores. No los sustituyas en el repositorio: consúltalos con AWS CLI y úsalos solo al ejecutar.
+
+### 6.1 Crear la API y entender el stage `$default`
+
+```code
+aws apigatewayv2 create-api \
+  --name users-http-api \
+  --protocol-type HTTP \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+```
+
+`--protocol-type HTTP` selecciona HTTP API, más simple y económica que REST API para este caso. La respuesta contiene `ApiId` y `ApiEndpoint`; anótalos como `API_ID_REAL` y `API_ENDPOINT_REAL`. La API no trae un stage utilizable hasta que lo crees: lo haremos en 6.4 como `$default` con *auto deploy*, de modo que cada ruta nueva quede publicada sin ejecutar `create-deployment`. Es cómodo para el lab; en producción suele usarse un stage nombrado, despliegues controlados y dominios personalizados.
+
+### 6.2 Crear las integraciones Lambda
+
+Una integración especifica qué Lambda recibe una ruta. `AWS_PROXY` entrega a Go el evento HTTP API v2 prácticamente sin transformaciones. Crea una por función; copia el `IntegrationId` de cada respuesta como `INTEGRATION_ID_*`.
+
+```code
+aws apigatewayv2 create-integration \
+  --api-id API_ID_REAL \
+  --integration-type AWS_PROXY \
+  --integration-uri arn:aws:apigateway:REGION_REAL:lambda:path/2015-03-31/functions/arn:aws:lambda:REGION_REAL:ACCOUNT_ID_REAL:function:users-create-user/invocations \
+  --payload-format-version 2.0 \
+  --timeout-in-millis 10000
+
+aws apigatewayv2 create-integration \
+  --api-id API_ID_REAL \
+  --integration-type AWS_PROXY \
+  --integration-uri arn:aws:apigateway:REGION_REAL:lambda:path/2015-03-31/functions/arn:aws:lambda:REGION_REAL:ACCOUNT_ID_REAL:function:users-authenticate-user/invocations \
+  --payload-format-version 2.0 \
+  --timeout-in-millis 10000
+
+aws apigatewayv2 create-integration \
+  --api-id API_ID_REAL \
+  --integration-type AWS_PROXY \
+  --integration-uri arn:aws:apigateway:REGION_REAL:lambda:path/2015-03-31/functions/arn:aws:lambda:REGION_REAL:ACCOUNT_ID_REAL:function:users-list-active-users/invocations \
+  --payload-format-version 2.0 \
+  --timeout-in-millis 10000
+```
+
+La URI no es la URL pública de Lambda: es el formato interno que API Gateway exige para invocarla. `--payload-format-version 2.0` debe coincidir con `events.APIGatewayV2HTTPRequest` de los handlers. Los 10 000 ms se alinean con el timeout de Lambda; API Gateway puede agotar su propio timeout antes que la función, por lo que en producción ambos valores se diseñan juntos.
+
+### 6.3 Crear rutas y permisos mínimos de invocación
+
+Primero vincula método, path e integración. El `--target` siempre tiene formato `integrations/INTEGRATION_ID_REAL`.
+
+```code
+aws apigatewayv2 create-route --api-id API_ID_REAL --route-key 'POST /users' --target integrations/INTEGRATION_ID_CREATE_REAL
+aws apigatewayv2 create-route --api-id API_ID_REAL --route-key 'POST /auth/login' --target integrations/INTEGRATION_ID_AUTH_REAL
+aws apigatewayv2 create-route --api-id API_ID_REAL --route-key 'GET /users/active' --target integrations/INTEGRATION_ID_LIST_REAL
+```
+
+Después permite que **solo esta API, método y ruta** invoquen cada función:
+
+```code
+aws lambda add-permission \
+  --function-name users-create-user \
+  --statement-id allow-apigateway-create-user \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn arn:aws:execute-api:REGION_REAL:ACCOUNT_ID_REAL:API_ID_REAL/*/POST/users
+
+aws lambda add-permission \
+  --function-name users-authenticate-user \
+  --statement-id allow-apigateway-authenticate-user \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn arn:aws:execute-api:REGION_REAL:ACCOUNT_ID_REAL:API_ID_REAL/*/POST/auth/login
+
+aws lambda add-permission \
+  --function-name users-list-active-users \
+  --statement-id allow-apigateway-list-active-users \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn arn:aws:execute-api:REGION_REAL:ACCOUNT_ID_REAL:API_ID_REAL/*/GET/users/active
+```
+
+`add-permission` modifica la política basada en recursos de Lambda, distinta del rol de ejecución IAM. El rol permite que el código acceda a DynamoDB; este permiso permite que API Gateway active la función. `--source-arn` evita conceder invocación a cualquier API Gateway de la cuenta. Si repites un comando con el mismo `--statement-id`, Lambda responde conflicto: consulta la política antes de crear otro identificador.
+
+### 6.4 Logs de acceso y comprobación
+
+Los logs de Lambda ya tienen tres días de retención. Para tener también visibilidad de HTTP, crea un grupo de acceso de API Gateway y configura el stage `$default`; las comillas simples evitan que Bash interprete el carácter `$`.
+
+```code
+aws logs create-log-group \
+  --log-group-name /aws/apigateway/users-http-api \
+  --tags environment=dev,system=users,owner=backend,managed-by=manual-cli
+
+aws logs put-retention-policy \
+  --log-group-name /aws/apigateway/users-http-api \
+  --retention-in-days 3
+
+aws apigatewayv2 create-stage \
+  --api-id API_ID_REAL \
+  --stage-name '$default' \
+  --auto-deploy \
+  --access-log-settings '{"DestinationArn":"arn:aws:logs:REGION_REAL:ACCOUNT_ID_REAL:log-group:/aws/apigateway/users-http-api","Format":"{\\"requestId\\":\\"$context.requestId\\",\\"status\\":\\"$context.status\\",\\"routeKey\\":\\"$context.routeKey\\",\\"integrationError\\":\\"$context.integrationErrorMessage\\"}"}'
+```
+
+En producción restringe CORS si lo habilitas, usa autenticación/autorización antes de exponer rutas sensibles, y define alarmas sobre 5xx y latencia. Para este lab no habilitamos CORS ni autenticación: la URL ejecuta una API pública deliberadamente y temporal.
+
+```code
+aws apigatewayv2 get-routes --api-id API_ID_REAL --query 'Items[*].[RouteKey,Target]' --output table
+aws apigatewayv2 get-integrations --api-id API_ID_REAL --query 'Items[*].[IntegrationId,IntegrationType,PayloadFormatVersion,IntegrationUri]' --output table
+aws lambda get-policy --function-name users-create-user --output json
+```
+
+Debes ver las tres rutas, tres integraciones `AWS_PROXY` con payload `2.0` y un statement de API Gateway en la política de cada Lambda.
+
+### 6.5 Prueba HTTP y colección Postman
+
+Antes de probar o importar Postman, consulta la URL exacta de la HTTP API v2. `API_ID_REAL` es el campo `ApiId` que devolvió `aws apigatewayv2 create-api`; si no lo anotaste, obténlo con `aws apigatewayv2 get-apis --query 'Items[*].[Name,ApiId]' --output table` y localiza `users-http-api`.
+
+```code
+aws apigatewayv2 get-api \
+  --api-id API_ID_REAL \
+  --query 'ApiEndpoint' \
+  --output text
+```
+
+La salida tiene una forma como `https://IDENTIFICADOR.execute-api.REGION_REAL.amazonaws.com`. Guárdala como `API_ENDPOINT_REAL` para los comandos de esta sección y como valor de la variable `baseUrl` en Postman. No es necesario agregar `/$default`: ese stage se sirve directamente desde la URL base. Si en producción usas un stage con nombre, por ejemplo `dev`, la URL sí incluiría `/dev` o se resolvería mediante un dominio personalizado.
+
+Para comprobar una ruta que no modifica datos, lista activos:
+
+```code
+curl -i 'API_ENDPOINT_REAL/users/active?limit=10'
+```
+
+Para las rutas POST usa un body JSON normal, no el archivo de evento Lambda: API Gateway construye ese evento por ti. Repetir un correo existente debe devolver `409`; autenticación puede devolver `404` por la regla simplificada descrita en 5.8.
+
+```code
+curl -i -X POST API_ENDPOINT_REAL/users \
+  -H 'Content-Type: application/json' \
+  --data '{"email":"EMAIL_EXISTENTE_REAL","password":"PASSWORD_DE_PRUEBA","name":"Nombre","lastName":"Apellido","dateOfBirth":"2000-01-02"}'
+
+curl -i -X POST API_ENDPOINT_REAL/auth/login \
+  -H 'Content-Type: application/json' \
+  --data '{"email":"EMAIL_EXISTENTE_REAL","password":"PASSWORD_DE_PRUEBA"}'
+```
+
+La colección importable está en `postman/usuarios.postman_collection.json`. Al importarla, abre la colección, entra en **Variables**, ubica `baseUrl` y pega exactamente el valor obtenido con `get-api`; no añadas una barra final. No contiene cuentas, ARNs ni endpoint real. Sus requests cubren crear usuario, repetirlo, autenticar y listar activos.
+
+La variable de ejemplo `demoPassword=PASSWORD` existe para reproducir el comportamiento simplificado actual del ejercicio: `create-user` guarda ese valor fijo y `authenticate-user` lo compara. Por eso el request de Postman puede funcionar aunque el contrato OpenAPI declare una contraseña de al menos 12 caracteres. Es una deuda didáctica deliberada, no un patrón de seguridad: antes de producción hay que almacenar un hash de la contraseña, validar el mínimo real y alinear handler, colección y OpenAPI.
+
+### Resultado final del laboratorio
+
+El laboratorio queda completo cuando `GET /users/active` responde `200`, los POST llegan a sus handlers (resultado de negocio `201`/`409` y `200`/`404` según datos), los logs de API Gateway y Lambda tienen retención de tres días, y la colección Postman reproduce las mismas rutas. Al terminar los dos días, elimina API Gateway, las Lambdas, la tabla y las imágenes si no continuarás el lab, para evitar costos residuales.
+
+Fuentes: [AWS CLI `create-function`](https://docs.aws.amazon.com/cli/latest/reference/lambda/create-function.html), [crear Lambda desde una imagen de contenedor](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html) y [AWS CLI `apigatewayv2 create-api`](https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/create-api.html).
+
+## 7. Inventario y limpieza del laboratorio manual
+
+La limpieza es destructiva: elimina datos, imágenes y configuraciones. Hazla solo al terminar el lab o cuando hayas confirmado que no necesitas conservar nada. Primero inventaría y anota los identificadores reales; después elimina en el orden de dependencias. No borres recursos de otro ejercicio solo porque tengan un nombre parecido.
+
+### 7.1 Inventario antes de borrar
+
+Ejecuta estas consultas de solo lectura. Sustituye `API_ID_REAL` por el `ApiId` anotado al crear la HTTP API. Los nombres de los tres roles, Lambdas, tabla y repositorio sí son los que creó este recorrido manual.
+
+```code
+aws apigatewayv2 get-apis \
+  --query 'Items[*].[Name,ApiId,ApiEndpoint]' \
+  --output table
+
+aws apigatewayv2 get-routes \
+  --api-id API_ID_REAL \
+  --query 'Items[*].[RouteKey,Target]' \
+  --output table
+
+aws lambda list-functions \
+  --query 'Functions[?starts_with(FunctionName, `users-`)].[FunctionName,PackageType,LastModified]' \
+  --output table
+
+aws dynamodb list-tables \
+  --query 'TableNames' \
+  --output table
+
+aws ecr describe-repositories \
+  --repository-names users-service \
+  --query 'repositories[0].[repositoryName,repositoryUri,imageTagMutability]' \
+  --output table
+
+aws logs describe-log-groups \
+  --log-group-name-prefix /aws/ \
+  --query 'logGroups[?retentionInDays==`3`].[logGroupName,retentionInDays]' \
+  --output table
+
+aws iam list-roles \
+  --query 'Roles[?starts_with(RoleName, `lambda-`)].[RoleName,Arn]' \
+  --output table
+
+aws iam list-policies \
+  --scope Local \
+  --query 'Policies[?starts_with(PolicyName, `lambda-users-`)].[PolicyName,Arn,AttachmentCount]' \
+  --output table
+```
+
+Revisa especialmente `AttachmentCount`: una política administrada por el cliente no se puede borrar mientras siga asociada a un rol. La búsqueda por prefijos es una ayuda, no una autorización para borrar en bloque; comprueba cada fila contra el inventario esperado.
+
+### 7.2 Orden de eliminación y motivo
+
+| Orden | Recursos manuales | Motivo |
+| --- | --- | --- |
+| 1 | HTTP API `users-http-api` | Elimina rutas, integraciones y stage que apuntan a Lambda. |
+| 2 | Grupo de logs de API Gateway | API Gateway no lo elimina automáticamente. |
+| 3 | Las tres Lambdas | Quita funciones y sus políticas basadas en recursos de invocación. |
+| 4 | Grupos de logs de Lambda | Lambda no garantiza borrar los logs al eliminar una función. |
+| 5 | Roles IAM | Ya no deben estar en uso por Lambda. |
+| 6 | Políticas IAM administradas por el cliente | Primero se desasocian de los roles; luego se eliminan. |
+| 7 | Imágenes y repositorio ECR | La Lambda ya no depende de las imágenes. |
+| 8 | Tabla DynamoDB `users` | Es el último recurso con datos y posible costo de almacenamiento. |
+
+### 7.3 Eliminar API y logs de API Gateway
+
+El primer comando borra el API, incluidas sus rutas, integraciones y stage. No borra el grupo de logs que creaste por separado.
+
+```code
+aws apigatewayv2 delete-api \
+  --api-id API_ID_REAL
+
+aws logs delete-log-group \
+  --log-group-name /aws/apigateway/users-http-api
+```
+
+`delete-api` no requiere borrar rutas una por una. Si recibes `NotFoundException`, consulta el inventario: puede que la API ya se hubiera eliminado. En producción no elimines una API pública sin retirar antes DNS, consumidores y alarmas de forma planificada.
+
+### 7.4 Eliminar Lambdas y sus logs
+
+Las políticas de invocación de API Gateway forman parte de cada Lambda; `delete-function` las elimina junto con la función. Las tres funciones usan imágenes, pero eliminar la función no borra esas imágenes de ECR.
+
+```code
+aws lambda delete-function --function-name users-create-user
+aws lambda delete-function --function-name users-authenticate-user
+aws lambda delete-function --function-name users-list-active-users
+
+aws logs delete-log-group --log-group-name /aws/lambda/users-create-user
+aws logs delete-log-group --log-group-name /aws/lambda/users-authenticate-user
+aws logs delete-log-group --log-group-name /aws/lambda/users-list-active-users
+```
+
+Verifica que ya no existan antes de tocar roles IAM:
+
+```code
+aws lambda get-function --function-name users-create-user
+```
+
+El resultado esperado es un error `ResourceNotFoundException`. Repite la misma consulta, cambiando el nombre, para las otras dos Lambdas si quieres una verificación individual.
+
+### 7.5 Desasociar y borrar IAM
+
+Primero quita la política AWS administrada de logs y la política DynamoDB propia de cada rol. Después borra el rol. Las políticas DynamoDB se eliminan al final, cuando `AttachmentCount` sea cero.
+
+```code
+aws iam detach-role-policy \
+  --role-name lambda-create-user-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+aws iam detach-role-policy \
+  --role-name lambda-create-user-role \
+  --policy-arn POLICY_ARN_CREATE_REAL
+
+aws iam detach-role-policy \
+  --role-name lambda-authenticate-user-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+aws iam detach-role-policy \
+  --role-name lambda-authenticate-user-role \
+  --policy-arn POLICY_ARN_AUTHENTICATE_REAL
+
+aws iam detach-role-policy \
+  --role-name lambda-list-active-users-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+aws iam detach-role-policy \
+  --role-name lambda-list-active-users-role \
+  --policy-arn POLICY_ARN_LIST_REAL
+
+aws iam delete-role --role-name lambda-create-user-role
+aws iam delete-role --role-name lambda-authenticate-user-role
+aws iam delete-role --role-name lambda-list-active-users-role
+```
+
+`POLICY_ARN_*_REAL` se obtiene de `aws iam list-policies --scope Local` en el inventario; no copies un ARN de otra cuenta. `AWSLambdaBasicExecutionRole` es una política administrada por AWS: la desasocias, pero **no** la eliminas porque pertenece a AWS y puede ser utilizada por otros roles.
+
+Ahora borra solo las tres políticas administradas por el cliente del ejercicio:
+
+```code
+aws iam delete-policy --policy-arn POLICY_ARN_CREATE_REAL
+aws iam delete-policy --policy-arn POLICY_ARN_AUTHENTICATE_REAL
+aws iam delete-policy --policy-arn POLICY_ARN_LIST_REAL
+```
+
+Si `delete-policy` indica que existen varias versiones, primero consulta cuál es la predeterminada y elimina únicamente las versiones que no lo sean. Nunca intentes borrar la versión predeterminada.
+
+```code
+aws iam list-policy-versions --policy-arn POLICY_ARN_CREATE_REAL
+aws iam delete-policy-version --policy-arn POLICY_ARN_CREATE_REAL --version-id VERSION_ID_NO_PREDETERMINADA_REAL
+```
+
+Repite esas dos líneas por cada política que tenga versiones no predeterminadas, y vuelve a ejecutar `delete-policy`. Esto evita acumular versiones y respeta el límite de cinco versiones por política administrada.
+
+### 7.6 Vaciar ECR y borrar el repositorio
+
+Un repositorio ECR debe estar vacío para poder eliminarse. Primero lista sus imágenes para revisar lo que desaparecerá:
+
+```code
+aws ecr list-images \
+  --repository-name users-service \
+  --query 'imageIds[*]' \
+  --output json
+```
+
+Para cada objeto `imageTag` o `imageDigest` que devuelva la consulta, ejecuta un borrado explícito. Ejemplo con un tag de laboratorio:
+
+```code
+aws ecr batch-delete-image \
+  --repository-name users-service \
+  --image-ids imageTag=CREATE_USER_TAG_REAL
+```
+
+Repite el comando para las imágenes restantes; usar una a una hace visible qué vas a destruir. Cuando `list-images` devuelva una lista vacía, elimina el repositorio:
+
+```code
+aws ecr delete-repository \
+  --repository-name users-service
+```
+
+No uses `--force` en el lab como sustituto de revisar el inventario. En producción una política de ciclo de vida suele retirar imágenes antiguas, pero antes de borrar un repositorio se confirma que ningún despliegue, rollback o función lo necesita.
+
+### 7.7 Borrar la tabla y comprobar la cuenta
+
+Este es el paso que elimina todos los usuarios de prueba y el índice `GSI1` con ellos:
+
+```code
+aws dynamodb delete-table \
+  --table-name users
+
+aws dynamodb wait table-not-exists \
+  --table-name users
+```
+
+`delete-table` inicia el borrado; `wait table-not-exists` espera hasta que DynamoDB confirme que terminó. Para verificar el inventario final de este recorrido manual:
+
+```code
+aws dynamodb describe-table --table-name users
+aws ecr describe-repositories --repository-names users-service
+aws iam get-role --role-name lambda-create-user-role
+aws lambda get-function --function-name users-create-user
+```
+
+Cada consulta debe responder `ResourceNotFoundException` o el error equivalente de recurso inexistente. Cambia el nombre para comprobar las otras dos funciones y roles. Si también desplegaste la alternativa CDK, destrúyela desde [su guía](../04-cdk/README.md#9-inventario-y-limpieza-del-laboratorio-cdk): sus recursos y el bootstrap de CDK son independientes de esta limpieza manual.
 
 ## Cuando migres de CLI a CDK
 

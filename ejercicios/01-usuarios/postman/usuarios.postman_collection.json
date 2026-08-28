@@ -1,13 +1,29 @@
 {
-  "info": {"name": "01 Usuarios", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "info": {
+    "name": "01 Usuarios - HTTP API",
+    "description": "Importa esta colección y cambia únicamente baseUrl por el ApiEndpoint de tu HTTP API. No contiene cuenta AWS, ARN ni URL desplegada.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
   "variable": [
-    {"key": "baseUrl", "value": "https://REEMPLAZA.execute-api.us-east-1.amazonaws.com"},
+    {"key": "baseUrl", "value": "https://REEMPLAZA.execute-api.REGION_REAL.amazonaws.com"},
     {"key": "demoEmail", "value": "ana@example.com"},
     {"key": "demoPassword", "value": "PASSWORD"}
   ],
   "item": [
-    {"name": "Crear usuario", "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"Ana\",\n  \"lastName\": \"Demo\",\n  \"email\": \"{{demoEmail}}\",\n  \"password\": \"{{demoPassword}}\",\n  \"dateOfBirth\": \"2000-01-02\"\n}"}, "url": "{{baseUrl}}/users"}},
-    {"name": "Autenticar", "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"email\": \"{{demoEmail}}\",\n  \"password\": \"{{demoPassword}}\"\n}"}, "url": "{{baseUrl}}/auth/login"}},
-    {"name": "Listar activos", "request": {"method": "GET", "url": "{{baseUrl}}/users/active?limit=10"}}
+    {
+      "name": "Crear usuario (primera vez: 201; repetido: 409)",
+      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "options": {"raw": {"language": "json"}}, "raw": "{\n  \"name\": \"Ana\",\n  \"lastName\": \"Demo\",\n  \"email\": \"{{demoEmail}}\",\n  \"password\": \"{{demoPassword}}\",\n  \"dateOfBirth\": \"2000-01-02\"\n}"}, "url": "{{baseUrl}}/users"},
+      "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Respuesta de creación o duplicado', function () {", "  pm.expect(pm.response.code).to.be.oneOf([201, 409]);", "});"]}}]
+    },
+    {
+      "name": "Autenticar",
+      "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "options": {"raw": {"language": "json"}}, "raw": "{\n  \"email\": \"{{demoEmail}}\",\n  \"password\": \"{{demoPassword}}\"\n}"}, "url": "{{baseUrl}}/auth/login"},
+      "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Respuesta de autenticación gestionada', function () {", "  pm.expect(pm.response.code).to.be.oneOf([200, 404]);", "});"]}}]
+    },
+    {
+      "name": "Listar usuarios activos",
+      "request": {"method": "GET", "url": "{{baseUrl}}/users/active?limit=10"},
+      "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Lista activa disponible', function () {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json()).to.have.property('items');", "});"]}}]
+    }
   ]
 }

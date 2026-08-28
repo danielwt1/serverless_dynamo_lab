@@ -1,8 +1,8 @@
 #!/usr/bin/env node
+import * as cdk from 'aws-cdk-lib';
+import { UsersLabStack } from '../lib/users-lab-stack';
 
-const cdk = require('aws-cdk-lib');
-const { UsersLabStack } = require('../lib/users-lab-stack');
-
+/** Punto de entrada: aquí se elige qué stacks forman la aplicación CDK. */
 const app = new cdk.App();
 
 new UsersLabStack(app, 'UsersLabStack', {

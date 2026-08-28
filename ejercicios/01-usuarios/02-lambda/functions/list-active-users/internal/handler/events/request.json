@@ -1,0 +1,8 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /users/active",
+  "rawPath": "/users/active",
+  "queryStringParameters": {"limit": "10"},
+  "requestContext": {"http": {"method": "GET", "path": "/users/active"}},
+  "isBase64Encoded": false
+}

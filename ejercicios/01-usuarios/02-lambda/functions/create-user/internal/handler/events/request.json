@@ -1,0 +1,8 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /users",
+  "rawPath": "/users",
+  "requestContext": {"http": {"method": "POST", "path": "/users"}},
+  "body": "{\"email\":\"ana@example.com\",\"password\":\"a-secure-password\",\"name\":\"Ana\",\"lastName\":\"Lopez\",\"dateOfBirth\":\"1995-06-20\"}",
+  "isBase64Encoded": false
+}

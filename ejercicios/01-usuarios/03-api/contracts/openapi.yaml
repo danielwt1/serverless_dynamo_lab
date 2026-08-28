@@ -1,0 +1,203 @@
+openapi: 3.0.3
+info:
+  title: Users API
+  version: 0.1.0
+  description: Contratos para las Lambdas del ejercicio de usuarios.
+paths:
+  /users:
+    post:
+      operationId: createUser
+      summary: Registra un usuario con un correo unico.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: Usuario creado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/EmailAlreadyExists'
+  /auth/login:
+    post:
+      operationId: authenticateUser
+      summary: Verifica las credenciales de un usuario activo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Credenciales validas. La emision de token queda para la fase API.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatedUser'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '403':
+          $ref: '#/components/responses/InactiveUser'
+  /users/active:
+    get:
+      operationId: listActiveUsers
+      summary: Lista usuarios activos del mas reciente al mas antiguo.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: cursor
+          in: query
+          description: Cursor opaco obtenido de la pagina anterior.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pagina de usuarios activos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [email, password, name, lastName, dateOfBirth]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 12
+          writeOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        dateOfBirth:
+          type: string
+          format: date
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          writeOnly: true
+    User:
+      type: object
+      required: [userId, email, name, lastName, dateOfBirth, roles, state, registeredAt]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        lastName:
+          type: string
+        dateOfBirth:
+          type: string
+          format: date
+        roles:
+          type: array
+          items:
+            type: string
+          example: [USER]
+        state:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        registeredAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AuthenticatedUser:
+      type: object
+      required: [userId, email, roles, state]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: string
+        state:
+          type: string
+          enum: [ACTIVE]
+    UserPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        nextCursor:
+          type: string
+          nullable: true
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+  responses:
+    ValidationError:
+      description: Datos de entrada invalidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EmailAlreadyExists:
+      description: Ya existe un usuario con ese correo.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InvalidCredentials:
+      description: Correo o contrasena invalidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InactiveUser:
+      description: La cuenta esta inactiva.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

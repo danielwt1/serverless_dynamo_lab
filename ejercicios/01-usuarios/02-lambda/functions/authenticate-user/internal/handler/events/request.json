@@ -1,0 +1,8 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /auth/login",
+  "rawPath": "/auth/login",
+  "requestContext": {"http": {"method": "POST", "path": "/auth/login"}},
+  "body": "{\"email\":\"ana@example.com\",\"password\":\"a-secure-password\"}",
+  "isBase64Encoded": false
+}

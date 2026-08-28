@@ -1,0 +1,12 @@
+{
+  "info": {"name": "02 Blog publicación", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "variable": [
+    {"key": "baseUrl", "value": "https://REEMPLAZA.execute-api.us-east-1.amazonaws.com"},
+    {"key": "authorId", "value": "author-1"}
+  ],
+  "item": [
+    {"name": "Crear draft", "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"description\": \"Post de prueba\",\n  \"status\": \"DRAFT\"\n}"}, "url": "{{baseUrl}}/authors/{{authorId}}/posts"}},
+    {"name": "Listar drafts", "request": {"method": "GET", "url": "{{baseUrl}}/authors/{{authorId}}/drafts"}},
+    {"name": "Listar publicados", "request": {"method": "GET", "url": "{{baseUrl}}/authors/{{authorId}}/posts"}}
+  ]
+}

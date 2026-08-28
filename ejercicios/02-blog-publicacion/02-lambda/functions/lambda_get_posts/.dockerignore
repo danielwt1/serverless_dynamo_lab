@@ -1,0 +1,5 @@
+.git
+coverage
+*.test
+events
+README.md

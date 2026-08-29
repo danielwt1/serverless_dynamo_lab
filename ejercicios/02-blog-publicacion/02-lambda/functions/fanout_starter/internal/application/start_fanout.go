@@ -24,11 +24,12 @@ func (uc *StartFanoutUseCase) Start(ctx context.Context, transition domain.Publi
 		return err
 	}
 
-	// Even when META already exists, send the initial job again. A prior attempt
-	// could have failed after persisting META but before SQS accepted the job.
+	// crea meta en dynamo apra indicar que inicio el batch de notificacion
 	job := domain.FanoutJob{EventID: transition.EventID, StreamEventID: transition.EventID, PostID: transition.PostID, AuthorID: transition.AuthorID, BatchNumber: 1, CreatedAt: now}
+	//intenta enviar mensaje para que empeice a notificar de a batches
 	if err := uc.queue.Send(ctx, job); err != nil {
 		return err
 	}
+	//actualiza estado a encolado (entrego mensaje a sqs)
 	return uc.progress.MarkInitialJobEnqueued(ctx, transition.EventID, now)
 }

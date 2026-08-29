@@ -11,7 +11,7 @@ type FanoutJob struct {
 }
 
 type PublishTransition struct {
-	EventID string
-	PostID  string
+	EventID  string
+	PostID   string
 	AuthorID string
 }

@@ -12,6 +12,7 @@ type progressRepositoryStub struct {
 	input  *domain.PublishTransition
 	err    error
 	output bool
+	enqueued bool
 }
 
 type fanoutQueueStub struct {
@@ -23,12 +24,26 @@ func (pr *progressRepositoryStub) CreateMeta(ctx context.Context, transition dom
 	return pr.output, pr.err
 
 }
+func (pr *progressRepositoryStub) InitialJobEnqueued(ctx context.Context, eventID string) (bool, error) {
+	return pr.enqueued, pr.err
+}
 func (pr *progressRepositoryStub) MarkInitialJobEnqueued(ctx context.Context, eventID, updatedAt string) error {
 	return pr.err
 }
 
 func (fn *fanoutQueueStub) Send(ctx context.Context, job domain.FanoutJob) error {
+	fn.input = &job
 	return fn.err
+}
+
+func TestStartFanout_SkipsAnAlreadyEnqueuedInitialJob(t *testing.T) {
+	progress := &progressRepositoryStub{output: false, enqueued: true}
+	queue := &fanoutQueueStub{}
+
+	err := NewStartFanoutUseCase(progress, queue).Start(context.Background(), domain.PublishTransition{EventID: "event-1"})
+
+	assert.NoError(t, err)
+	assert.Nil(t, queue.input)
 }
 
 func Test_when_use_case_call_to_creat_and_init_batch_process(t *testing.T) {

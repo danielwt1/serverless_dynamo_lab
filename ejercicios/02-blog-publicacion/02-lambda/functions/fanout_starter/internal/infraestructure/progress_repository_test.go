@@ -13,10 +13,16 @@ import (
 
 type progressDynamoStub struct {
 	putItemInput     *dynamodb.PutItemInput
+	getItemInput     *dynamodb.GetItemInput
 	updateInput      *dynamodb.UpdateItemInput
 	putItemOutput    *dynamodb.PutItemOutput
 	updateItemOutput *dynamodb.UpdateItemOutput
 	err              error
+}
+
+func (pd *progressDynamoStub) GetItem(ctx context.Context, input *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	pd.getItemInput = input
+	return &dynamodb.GetItemOutput{}, pd.err
 }
 
 func (pd *progressDynamoStub) PutItem(ctx context.Context, input *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {

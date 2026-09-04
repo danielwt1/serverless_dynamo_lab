@@ -1,0 +1,24 @@
+{
+  "name": "blog-publicacion-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Infraestructura como código del laboratorio Blog Publicación",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "synth": "npm run build && cdk synth",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "diff": "npm run build && cdk diff",
+    "deploy": "npm run build && cdk deploy",
+    "destroy": "npm run build && cdk destroy"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "aws-cdk": "2.1139.0",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.267.0",
+    "constructs": "10.5.0"
+  }
+}

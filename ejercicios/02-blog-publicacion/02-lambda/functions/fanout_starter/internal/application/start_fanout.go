@@ -19,13 +19,19 @@ func NewStartFanoutUseCase(progress domain.ProgressRepository, queue domain.Fano
 
 func (uc *StartFanoutUseCase) Start(ctx context.Context, transition domain.PublishTransition) error {
 	now := uc.now().UTC().Format(time.RFC3339Nano)
-	_, err := uc.progress.CreateMeta(ctx, transition, now)
+	created, err := uc.progress.CreateMeta(ctx, transition, now)
 	if err != nil {
 		return err
 	}
+	if !created {
+		enqueued, err := uc.progress.InitialJobEnqueued(ctx, transition.EventID)
+		if err != nil { return err }
+		if enqueued { return nil }
+	}
 
 	// crea meta en dynamo apra indicar que inicio el batch de notificacion
-	job := domain.FanoutJob{EventID: transition.EventID, StreamEventID: transition.EventID, PostID: transition.PostID, AuthorID: transition.AuthorID, BatchNumber: 1, CreatedAt: now}
+	// eventId is the stable identity of this fanout. A retry must reuse it.
+	job := domain.FanoutJob{EventID: transition.EventID, FanoutID: transition.EventID, JobID: transition.EventID + "#INITIAL", StreamEventID: transition.EventID, PostID: transition.PostID, AuthorID: transition.AuthorID, BatchNumber: 1, CreatedAt: now}
 	//intenta enviar mensaje para que empeice a notificar de a batches
 	if err := uc.queue.Send(ctx, job); err != nil {
 		return err

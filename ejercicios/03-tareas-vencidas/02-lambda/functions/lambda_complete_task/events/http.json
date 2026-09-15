@@ -1,0 +1,6 @@
+{
+  "version": "2.0",
+  "routeKey": "PATCH /tasks/{ownerId}/{taskId}/complete",
+  "rawPath": "/tasks/user-1/task-1/complete",
+  "pathParameters": { "ownerId": "user-1", "taskId": "task-1" }
+}

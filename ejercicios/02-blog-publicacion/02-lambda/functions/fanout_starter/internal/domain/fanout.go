@@ -2,6 +2,8 @@ package domain
 
 type FanoutJob struct {
 	EventID       string `json:"eventId"`
+	FanoutID      string `json:"fanoutId"`
+	JobID         string `json:"jobId"`
 	StreamEventID string `json:"streamEventId"`
 	PostID        string `json:"postId"`
 	AuthorID      string `json:"authorId"`

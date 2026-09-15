@@ -18,7 +18,10 @@ func NewDynamoStreamHandler(useCase domain.StartFanoutUseCase) *DynamoStreamHand
 
 func (h *DynamoStreamHandler) Handle(ctx context.Context, event events.DynamoDBEvent) error {
 	for _, record := range event.Records {
-		if record.EventName != "MODIFY" || record.Change.OldImage["status"].String() != "DRAFT" || record.Change.NewImage["status"].String() != "PUBLISHED" {
+		newStatus := record.Change.NewImage["status"].String()
+		isPublishedInsert := record.EventName == "INSERT" && newStatus == "PUBLISHED"
+		isDraftPublication := record.EventName == "MODIFY" && record.Change.OldImage["status"].String() == "DRAFT" && newStatus == "PUBLISHED"
+		if !isPublishedInsert && !isDraftPublication {
 			continue
 		}
 		postIDValue, hasPostID := record.Change.NewImage["post_id"]

@@ -58,6 +58,22 @@ func TestDynamoStreamHandler_Handle_StartsFanoutForPublishedPost(t *testing.T) {
 	}}, useCase.transitions)
 }
 
+func TestDynamoStreamHandler_Handle_StartsFanoutForDirectlyPublishedPost(t *testing.T) {
+	useCase := &startFanoutUseCaseStub{}
+	handler := NewDynamoStreamHandler(useCase)
+	event := dynamoDBEventFromJSON(t, `{
+		"Records": [{
+			"eventID": "stream-event-1", "eventName": "INSERT",
+			"dynamodb": {"NewImage": {
+				"status": {"S": "PUBLISHED"}, "post_id": {"S": "post-1"}, "author_id": {"S": "author-1"}
+			}}
+		}]
+	}`)
+
+	require.NoError(t, handler.Handle(context.Background(), event))
+	assert.Len(t, useCase.transitions, 1)
+}
+
 func TestDynamoStreamHandler_Handle_IgnoresUnrelatedChanges(t *testing.T) {
 	useCase := &startFanoutUseCaseStub{}
 	handler := NewDynamoStreamHandler(useCase)

@@ -29,3 +29,7 @@ despliegue por consola o CLI en un orden único de lectura.
 
 Las carpetas de fase conservan el código y sus puntos de entrada; no duplican
 las decisiones de diseño.
+
+La alternativa IaC del ejercicio está en [04-cdk](04-cdk/README.md). El
+[inventario de servicios](04-cdk/documentacion/01-inventario-servicios.md)
+enumera qué creará su stack antes de desplegarlo.

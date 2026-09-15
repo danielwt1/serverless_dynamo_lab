@@ -1,0 +1,113 @@
+openapi: 3.0.3
+info:
+  title: Tasks Overdue Lab API
+  version: 1.0.0
+paths:
+  /tasks/{ownerId}:
+    parameters:
+      - $ref: '#/components/parameters/OwnerId'
+    post:
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTaskRequest' }
+      responses:
+        '201':
+          description: Tarea creada
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    get:
+      operationId: listTasks
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Página de tareas
+          content: { application/json: { schema: { $ref: '#/components/schemas/TaskPage' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /tasks/{ownerId}/pending:
+    parameters:
+      - $ref: '#/components/parameters/OwnerId'
+    get:
+      operationId: listPendingTasks
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Página de tareas pendientes
+          content: { application/json: { schema: { $ref: '#/components/schemas/TaskPage' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /tasks/{ownerId}/{taskId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/OwnerId'
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    patch:
+      operationId: completeTask
+      responses:
+        '200':
+          description: Tarea completada; repetir la operación devuelve el mismo estado
+          content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: Tarea inexistente
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: La tarea ya no está pendiente
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '500': { $ref: '#/components/responses/InternalError' }
+components:
+  parameters:
+    OwnerId:
+      name: ownerId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+  schemas:
+    CreateTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [description, expired_at]
+      properties:
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        expired_at: { type: string, format: date-time }
+    Task:
+      type: object
+      required: [task_id, owner_id, description, created_at, expired_at, status]
+      properties:
+        task_id: { type: string }
+        owner_id: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        expired_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        status: { type: string, enum: [PENDING, COMPLETED] }
+    TaskPage:
+      type: object
+      required: [tasks]
+      properties:
+        tasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        cursor: { type: string }
+    Error:
+      type: object
+      required: [message]
+      properties: { message: { type: string } }
+  responses:
+    BadRequest:
+      description: Solicitud inválida
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    InternalError:
+      description: Error interno
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

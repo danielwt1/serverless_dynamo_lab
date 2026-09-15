@@ -1,4 +1,4 @@
-package main
+package infraestructure
 
 import (
 	"context"
@@ -148,6 +148,48 @@ func Test_Get_users_tasks(t *testing.T) {
 			assert.Equal(t, uc.expectedStartKey, stub.input.ExclusiveStartKey)
 		})
 	}
+}
+
+func Test_Get_pending_tasks(t *testing.T) {
+	t.Run("convierte la proyeccion pendiente sin requerir status", func(t *testing.T) {
+		stub := &DynamoClientStub{output: &dynamodb.QueryOutput{Items: []map[string]types.AttributeValue{
+			{
+				"PK":          &types.AttributeValueMemberS{Value: "OWNER_ID#1"},
+				"SK":          &types.AttributeValueMemberS{Value: "STATUS#PENDING#EXPIRED_AT#2026-09-06T00:00:00Z#TASK_ID#task-1"},
+				"task_id":     &types.AttributeValueMemberS{Value: "task-1"},
+				"owner_id":    &types.AttributeValueMemberS{Value: "1"},
+				"description": &types.AttributeValueMemberS{Value: "Pagar factura"},
+			}}}}
+		adapter := NewDynamoAdapter(stub, "tasks")
+
+		result, err := adapter.GetPendingTasksByUser(context.TODO(), "1", "")
+
+		assert.NoError(t, err)
+		assert.Equal(t, domain.QueryResult{Task: []domain.TaskModel{{
+			TaskId: "task-1", OwnerId: "1", Description: "Pagar factura", Status: "PENDING",
+		}}}, result)
+		assert.Equal(t, "OWNER_ID#1", attributeString(stub.input.ExpressionAttributeValues[":PK"]))
+		assert.Equal(t, "STATUS#PENDING#", attributeString(stub.input.ExpressionAttributeValues[":SK"]))
+	})
+
+	t.Run("devuelve error y no panic si falta un atributo requerido", func(t *testing.T) {
+		stub := &DynamoClientStub{output: &dynamodb.QueryOutput{Items: []map[string]types.AttributeValue{
+			{"task_id": &types.AttributeValueMemberS{Value: "task-1"}, "owner_id": &types.AttributeValueMemberS{Value: "1"}},
+		}}}
+		adapter := NewDynamoAdapter(stub, "tasks")
+
+		_, err := adapter.GetPendingTasksByUser(context.TODO(), "1", "")
+
+		assert.ErrorIs(t, err, errors.InvalidTask)
+	})
+}
+
+func attributeString(value types.AttributeValue) string {
+	stringValue, ok := value.(*types.AttributeValueMemberS)
+	if !ok {
+		return ""
+	}
+	return stringValue.Value
 }
 
 func mustCursor(t *testing.T, key map[string]types.AttributeValue) string {

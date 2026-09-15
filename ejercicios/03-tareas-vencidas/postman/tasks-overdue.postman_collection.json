@@ -1,0 +1,25 @@
+{
+  "info": {
+    "name": "Tasks Overdue Lab",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://replace.execute-api.us-east-1.amazonaws.com" },
+    { "key": "ownerId", "value": "user-1" },
+    { "key": "taskId", "value": "replace-after-create" }
+  ],
+  "item": [
+    {
+      "name": "Create task",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/tasks/{{ownerId}}",
+        "body": { "mode": "raw", "raw": "{\n  \"description\": \"Pagar factura\",\n  \"expired_at\": \"2030-09-20T20:00:00Z\"\n}" }
+      }
+    },
+    { "name": "List tasks", "request": { "method": "GET", "url": "{{baseUrl}}/tasks/{{ownerId}}" } },
+    { "name": "List pending tasks", "request": { "method": "GET", "url": "{{baseUrl}}/tasks/{{ownerId}}/pending" } },
+    { "name": "Complete task", "request": { "method": "PATCH", "url": "{{baseUrl}}/tasks/{{ownerId}}/{{taskId}}/complete" } }
+  ]
+}

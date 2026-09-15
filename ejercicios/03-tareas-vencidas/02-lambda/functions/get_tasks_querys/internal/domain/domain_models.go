@@ -3,15 +3,15 @@ package domain
 import "time"
 
 type TaskModel struct {
-	TaskId      string
-	OwnerId     string
-	Description string
-	CreatedAt   *time.Time
-	Expire_at   *time.Time
-	Status      string
+	TaskId      string     `json:"task_id"`
+	OwnerId     string     `json:"owner_id"`
+	Description string     `json:"description"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	Expire_at   *time.Time `json:"expired_at,omitempty"`
+	Status      string     `json:"status"`
 }
 
 type QueryResult struct {
-	Task   []TaskModel
-	Cursor string
+	Task   []TaskModel `json:"tasks"`
+	Cursor string      `json:"cursor,omitempty"`
 }

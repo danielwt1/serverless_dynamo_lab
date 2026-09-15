@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "TaskOverdue",
+  "title": "TaskOverdue",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_type", "event_id", "task_id", "owner_id", "description", "expired_at", "execution_time"],
+  "properties": {
+    "event_type": { "const": "TaskOverdue" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "owner_id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "expired_at": { "type": "string", "format": "date-time" },
+    "execution_time": { "type": "string", "format": "date-time" }
+  }
+}
